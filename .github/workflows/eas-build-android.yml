@@ -1,0 +1,141 @@
+name: EAS Build — Android AAB (with inputs)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      web_app_url:
+        description: 'Web app URL (optional)'
+        required: false
+        default: ''
+      app_name:
+        description: 'App display name (expo.name)'
+        required: true
+        default: 'My App'
+      application_id:
+        description: 'Android package id (com.example.myapp)'
+        required: true
+        default: 'com.example.myapp'
+      version_name:
+        description: 'App version (expo.version) e.g. 1.0.0'
+        required: true
+        default: '1.0.0'
+
+env:
+  # If your Expo project is in a subfolder, set this to that folder name (e.g. "expo-app")
+  PROJECT_PATH: '.'
+  UPLOAD_TO_S3: 'false' # change to "true" if you want S3 upload enabled
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.PROJECT_PATH }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: |
+          npm ci
+
+      - name: Install CLI tools
+        run: |
+          npm install -g expo-cli eas-cli
+          sudo apt-get update -y && sudo apt-get install -y jq
+
+      - name: Set env vars from inputs
+        # Map workflow inputs into clear env variables
+        run: echo "Inputs mapped"
+        env:
+          WEB_APP_URL: ${{ github.event.inputs.web_app_url || '' }}
+          APP_NAME: ${{ github.event.inputs.app_name }}
+          APPLICATION_ID: ${{ github.event.inputs.application_id }}
+          VERSION_NAME: ${{ github.event.inputs.version_name }}
+        # Make these env available to next steps
+      - name: Export inputs for later steps
+        run: |
+          echo "WEB_APP_URL=${{ github.event.inputs.web_app_url || '' }}" >> $GITHUB_ENV
+          echo "APP_NAME=${{ github.event.inputs.app_name }}" >> $GITHUB_ENV
+          echo "APPLICATION_ID=${{ github.event.inputs.application_id }}" >> $GITHUB_ENV
+          echo "VERSION_NAME=${{ github.event.inputs.version_name }}" >> $GITHUB_ENV
+          echo "PROJECT_PATH=${{ env.PROJECT_PATH }}" >> $GITHUB_ENV
+
+      - name: Verify app.json exists
+        run: |
+          if [ ! -f "${PROJECT_PATH}/app.json" ]; then
+            echo "app.json not found at ${PROJECT_PATH}/app.json"
+            echo "If you use app.config.js or a custom config, Jules please mention this in PR and stop."
+            # fail early to avoid confusing builds; adjust this if you want non-fatal
+            exit 1
+          fi
+
+      - name: Patch app.json with inputs
+        run: |
+          node -e "
+          const fs = require('fs');
+          const p = process.env.PROJECT_PATH + '/app.json';
+          const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+          // support both 'expo' root or direct structure
+          const expoRoot = j.expo ? j.expo : j;
+          expoRoot.name = process.env.APP_NAME || expoRoot.name;
+          expoRoot.version = process.env.VERSION_NAME || expoRoot.version;
+          if (!expoRoot.android) expoRoot.android = {};
+          expoRoot.android.package = process.env.APPLICATION_ID || expoRoot.android.package;
+          // write back same structure as before
+          const out = j.expo ? { ...j, expo: expoRoot } : expoRoot;
+          fs.writeFileSync(p, JSON.stringify(out, null, 2));
+          console.log('Patched', p);
+          "
+        env:
+          PROJECT_PATH: ${{ env.PROJECT_PATH }}
+          APP_NAME: ${{ github.event.inputs.app_name }}
+          VERSION_NAME: ${{ github.event.inputs.version_name }}
+          APPLICATION_ID: ${{ github.event.inputs.application_id }}
+
+      - name: Show patched app.json (for debug)
+        run: |
+          echo "---- app.json ----"
+          cat ${PROJECT_PATH}/app.json || true
+          echo "------------------"
+
+      - name: Login to Expo (using EXPO_TOKEN)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          echo "$EXPO_TOKEN" | eas login --token
+
+      - name: Run EAS build (android app-bundle)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npx eas build --platform android --profile production --non-interactive
+
+      - name: (Optional) Download build artifact & Upload to S3
+        if: env.UPLOAD_TO_S3 == 'true'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+        run: |
+          set -e
+          BUILD_ID=$(eas build:list --platform android --limit 1 --status finished --json | jq -r '.[0].id')
+          if [ -z "$BUILD_ID" ] || [ "$BUILD_ID" == "null" ]; then
+            echo "No finished builds found."
+            exit 1
+          fi
+          ARTIFACT_URL=$(eas build:view --platform android --id $BUILD_ID --json | jq -r '.artifacts.url')
+          curl -L -H "Authorization: Bearer $EXPO_TOKEN" -o app.aab "$ARTIFACT_URL"
+          aws configure set region "$AWS_REGION"
+          aws s3 cp app.aab "s3://$S3_BUCKET/expo-artifacts/app-${{ github.run_id }}-${{ github.run_number }}.aab" --acl public-read
+          echo "Uploaded to: https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/expo-artifacts/app-${{ github.run_id }}-${{ github.run_number }}.aab"
