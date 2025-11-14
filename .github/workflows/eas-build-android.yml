@@ -21,6 +21,14 @@ on:
         description: 'App version (expo.version) e.g. 1.0.0'
         required: true
         default: '1.0.0'
+      icon_url:
+        description: 'App icon URL (1024x1024 PNG)'
+        required: false
+        default: ''
+      splash_image_url:
+        description: 'Splash screen image URL (1242x2436 PNG)'
+        required: false
+        default: ''
 
 env:
   # If your Expo project is in a subfolder, set this to that folder name (e.g. "expo-app")
@@ -75,6 +83,13 @@ jobs:
           const expoRoot = config.expo ? config.expo : config;
           expoRoot.name = process.env.APP_NAME || expoRoot.name;
           expoRoot.version = process.env.VERSION_NAME || expoRoot.version;
+          if (process.env.ICON_URL) {
+            expoRoot.icon = process.env.ICON_URL;
+          }
+          if (process.env.SPLASH_IMAGE_URL) {
+            if (!expoRoot.splash) expoRoot.splash = {};
+            expoRoot.splash.image = process.env.SPLASH_IMAGE_URL;
+          }
           if (!expoRoot.android) expoRoot.android = {};
           expoRoot.android.package = process.env.APPLICATION_ID || expoRoot.android.package;
           const output = config.expo ? { ...config, expo: expoRoot } : expoRoot;
@@ -85,6 +100,8 @@ jobs:
           APP_NAME: ${{ github.event.inputs.app_name }}
           VERSION_NAME: ${{ github.event.inputs.version_name }}
           APPLICATION_ID: ${{ github.event.inputs.application_id }}
+          ICON_URL: ${{ github.event.inputs.icon_url }}
+          SPLASH_IMAGE_URL: ${{ github.event.inputs.splash_image_url }}
 
       - name: Show patched app.json (for debug)
         run: |
