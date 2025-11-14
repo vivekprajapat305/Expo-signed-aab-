@@ -2,6 +2,15 @@ name: Build Android App
 
 on:
   workflow_dispatch:
+    inputs:
+      appName:
+        description: 'App Name'
+        required: true
+        default: 'My Expo App'
+      webUrl:
+        description: 'Web URL'
+        required: true
+        default: 'https://expo.dev'
 
 jobs:
   build:
@@ -26,3 +35,6 @@ jobs:
 
       - name: Build Android App
         run: eas build -p android --profile production --non-interactive
+        env:
+          APP_NAME: ${{ github.event.inputs.appName }}
+          WEB_URL: ${{ github.event.inputs.webUrl }}
