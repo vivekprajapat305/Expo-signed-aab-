@@ -1,0 +1,83 @@
+name: EAS Build — Android AAB
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+env:
+  # Toggle this to "true" if you want the workflow to upload artifacts to S3
+  UPLOAD_TO_S3: "false"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install dependencies
+        run: |
+          npm ci
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install Expo CLI
+        run: |
+          npm install -g expo-cli eas-cli
+
+      - name: Login to Expo (using EXPO_TOKEN)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          echo "$EXPO_TOKEN" | eas login --token
+
+      - name: Run EAS build (android app-bundle)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npx eas build --platform android --profile production --non-interactive
+
+      - name: (Optional) Download build artifact & Upload to S3
+        if: env.UPLOAD_TO_S3 == 'true'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+        run: |
+          set -e
+
+          # 1) Retrieve the latest build ID for this project with expo CLI
+          # Note: adjust 'owner' or 'slug' if repo is configured differently.
+          BUILD_ID=$(eas build:list --platform android --limit 1 --status finished --json | jq -r '.[0].id')
+          if [ -z "$BUILD_ID" ] || [ "$BUILD_ID" == "null" ]; then
+            echo "No finished builds found."
+            exit 1
+          fi
+          echo "Found build id: $BUILD_ID"
+
+          # 2) Get artifact URL
+          ARTIFACT_URL=$(eas build:view --platform android --id $BUILD_ID --json | jq -r '.artifacts.url')
+          if [ -z "$ARTIFACT_URL" ] || [ "$ARTIFACT_URL" == "null" ]; then
+            echo "No artifact url found for build $BUILD_ID"
+            exit 1
+          fi
+          echo "Artifact URL: $ARTIFACT_URL"
+
+          # 3) Download artifact
+          curl -L -H "Authorization: Bearer $EXPO_TOKEN" -o app.aab "$ARTIFACT_URL"
+
+          # 4) Upload to S3
+          aws configure set region "$AWS_REGION"
+          aws s3 cp app.aab "s3://$S3_BUCKET/expo-artifacts/app-${{ github.run_id }}-${{ github.run_number }}.aab" --acl public-read
+
+          # 5) Print public URL (adjust if using path-style or custom domain)
+          echo "Uploaded to: https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/expo-artifacts/app-${{ github.run_id }}-${{ github.run_number }}.aab"
