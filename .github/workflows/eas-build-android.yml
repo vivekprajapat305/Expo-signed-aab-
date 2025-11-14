@@ -58,23 +58,6 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Set env vars from inputs
-        # Map workflow inputs into clear env variables
-        run: echo "Inputs mapped"
-        env:
-          WEB_APP_URL: ${{ github.event.inputs.web_app_url || '' }}
-          APP_NAME: ${{ github.event.inputs.app_name }}
-          APPLICATION_ID: ${{ github.event.inputs.application_id }}
-          VERSION_NAME: ${{ github.event.inputs.version_name }}
-        # Make these env available to next steps
-      - name: Export inputs for later steps
-        run: |
-          echo "WEB_APP_URL=${{ github.event.inputs.web_app_url || '' }}" >> $GITHUB_ENV
-          echo "APP_NAME=${{ github.event.inputs.app_name }}" >> $GITHUB_ENV
-          echo "APPLICATION_ID=${{ github.event.inputs.application_id }}" >> $GITHUB_ENV
-          echo "VERSION_NAME=${{ github.event.inputs.version_name }}" >> $GITHUB_ENV
-          echo "PROJECT_PATH=${{ env.PROJECT_PATH }}" >> $GITHUB_ENV
-
       - name: Verify app.json exists
         run: |
           if [ ! -f "app.json" ]; then
