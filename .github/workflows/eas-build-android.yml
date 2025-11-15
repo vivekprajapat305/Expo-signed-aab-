@@ -128,6 +128,7 @@ jobs:
 
       - name: Ensure EAS project is initialized (non-interactive)
         run: |
+          eas init --non-interactive --force
           eas init --non-interactive
 
       - name: Show eas.json (debug)
