@@ -126,16 +126,9 @@ jobs:
           cat app.json || true
           echo "--------------------------"
 
-
-
       - name: Ensure EAS project is initialized (non-interactive)
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          # Initialize / link the project to EAS in non-interactive mode.
-          # This registers the project on Expo servers and writes projectId locally so `eas build` works in CI.
-          # If the project is already linked, this command returns success and is safe to run.
-          eas init --non-interactive || true
+          eas init --non-interactive
 
       - name: Show eas.json (debug)
         run: |
