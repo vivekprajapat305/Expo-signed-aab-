@@ -16,6 +16,6 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "eas-cli": "^16.27.0"
+    "eas-cli": "^3.0.0"
   }
 }
