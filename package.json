@@ -15,7 +15,5 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "devDependencies": {
-    "eas-cli": "^3.0.0"
-  }
+  "devDependencies": {}
 }
