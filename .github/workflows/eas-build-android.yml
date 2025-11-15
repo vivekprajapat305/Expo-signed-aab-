@@ -61,7 +61,24 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm ci
+          echo "--- Node/NPM versions ---"
+          node --version
+          npm --version
+          echo "--- Package files ---"
+          ls -l package*
+          echo "--- Installing dependencies ---"
+          # Try npm ci first, which is faster and safer.
+          # If it fails, fall back to npm install. This can happen if package-lock.json is out of sync.
+          npm ci || ( \
+            echo "npm ci failed, falling back to npm install." && \
+            npm install --legacy-peer-deps \
+          )
+          echo "--- Post-install diagnostics ---"
+          # Check for npm debug logs if they exist
+          if [ -f "npm-debug.log" ]; then
+            echo "--- npm-debug.log ---"
+            tail -n 50 npm-debug.log
+          fi
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
