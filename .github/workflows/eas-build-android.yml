@@ -21,6 +21,10 @@ on:
         description: 'App version (expo.version) e.g. 1.0.0'
         required: true
         default: '1.0.0'
+      versionCode:
+        description: 'Android version code (integer)'
+        required: true
+        default: '1'
       icon_url:
         description: 'App icon URL (1024x1024 PNG)'
         required: false
