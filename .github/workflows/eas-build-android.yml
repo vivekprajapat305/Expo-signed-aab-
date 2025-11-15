@@ -61,24 +61,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          echo "--- Node/NPM versions ---"
-          node --version
-          npm --version
-          echo "--- Package files ---"
+          npm ci || (npm install --legacy-peer-deps && echo "npm ci failed, fell back to npm install")
+          echo "node version: $(node -v)"
+          echo "npm version: $(npm -v)"
           ls -l package*
-          echo "--- Installing dependencies ---"
-          # Try npm ci first, which is faster and safer.
-          # If it fails, fall back to npm install. This can happen if package-lock.json is out of sync.
-          npm ci || ( \
-            echo "npm ci failed, falling back to npm install." && \
-            npm install --legacy-peer-deps \
-          )
-          echo "--- Post-install diagnostics ---"
-          # Check for npm debug logs if they exist
-          if [ -f "npm-debug.log" ]; then
-            echo "--- npm-debug.log ---"
-            tail -n 50 npm-debug.log
-          fi
+          tail -n 100 ~/.npm/_logs/*-debug.log || true
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
@@ -126,10 +113,25 @@ jobs:
           cat app.json || true
           echo "--------------------------"
 
-      - name: Ensure EAS project is initialized (non-interactive)
+      - name: Install eas-cli (global fallback)
         run: |
-          eas init --non-interactive --force
-          eas init --non-interactive
+          npm install -g eas-cli@^3.0.0 || true
+
+      - name: Login to Expo (non-interactive)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          # login so eas commands can run
+          echo "$EXPO_TOKEN" | eas login --token
+
+      - name: Ensure EAS project is initialized (non-interactive)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          # Initialize / link the project to EAS in non-interactive mode.
+          # This registers the project on Expo servers and writes projectId locally so `eas build` works in CI.
+          # If the project is already linked, this command returns success and is safe to run.
+          eas init --non-interactive || true
 
       - name: Show eas.json (debug)
         run: |
@@ -137,9 +139,18 @@ jobs:
           cat eas.json || true
           echo "----------------------"
 
+      - name: Install eas-cli
+        run: npm install -g eas-cli@^3.0.0
+
+      - name: Log in to EAS
+        run: echo "${{ secrets.EXPO_TOKEN }}" | eas login --token
+
+      - name: Ensure EAS project is initialized
+        run: eas init --non-interactive
+
       - name: Run EAS build (android app-bundle)
         run: |
-          npx eas build --platform android --profile production --non-interactive
+          eas build --platform android --profile production --non-interactive
 
       - name: (Optional) Download build artifact & Upload to S3
         if: env.UPLOAD_TO_S3 == 'true'
