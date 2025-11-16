@@ -51,15 +51,28 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Setup Expo and EAS
-        uses: expo/expo-github-action@v8
+      - name: Cache npm
+        id: cache-npm
+        uses: actions/cache@v4
         with:
+          path: ~/.npm
+          # use package-lock.json hash for a stable, reliable cache key
+          key: node-modules-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            node-modules-${{ runner.os }}-
+        continue-on-error: true
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v7
+        with:
+          packager: 'npm'
+          expo-version: latest
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Install dependencies
         run: |
-          npm ci || (npm install --legacy-peer-deps && echo "npm ci failed, fell back to npm install")
+          npm ci
 
       - name: Ensure EAS project is initialized
         run: npx eas-cli@latest init --non-interactive --force
@@ -67,7 +80,7 @@ jobs:
       - name: Run EAS build
         run: npx eas-cli@latest build --platform android --profile production --non-interactive
 
-      - name: (Optional) Download build artifact & Upload to S3
+      - name: (Optional) Download build artifact & Upload to S3 (non-fatal)
         if: env.UPLOAD_TO_S3 == 'true'
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -77,19 +90,21 @@ jobs:
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
         run: |
           set -e
-          BUILD_ID=$(npx eas-cli@latest build:list --platform android --limit 1 --status finished --json | jq -r '.[0].id')
-          if [ -z "$BUILD_ID" ] || [ "$BUILD_ID" == "null" ]; then
-            echo "No finished builds found."
-            exit 1
+          # find last finished build id (best-effort)
+          BUILD_ID=$(npx eas-cli@latest build:list --platform android --limit 1 --status finished --json | jq -r '.[0].id' || true)
+          if [ -z "$BUILD_ID" ] || [ "$BUILD_ID" = "null" ]; then
+            echo "No finished builds found; skipping S3 upload."
+            exit 0
           fi
           echo "Found build id: $BUILD_ID"
-          ARTIFACT_URL=$(npx eas-cli@latest build:view $BUILD_ID --json | jq -r '.artifacts.buildUrl')
-          if [ -z "$ARTIFACT_URL" ] || [ "$ARTIFACT_URL" == "null" ]; then
-            echo "No artifact url found for build $BUILD_ID"
-            exit 1
+          ARTIFACT_URL=$(npx eas-cli@latest build:view $BUILD_ID --json | jq -r '.artifacts.buildUrl // empty' || true)
+          if [ -z "$ARTIFACT_URL" ]; then
+            echo "No artifact URL found for build $BUILD_ID; skipping S3 upload."
+            exit 0
           fi
-          echo "Artifact URL: $ARTIFACT_URL"
-          curl -L -H "Authorization: Bearer $EXPO_TOKEN" -o app.aab "$ARTIFACT_URL"
+          echo "Downloading artifact from: $ARTIFACT_URL"
+          curl -fL -o app.aab "$ARTIFACT_URL" || { echo "Download failed; skipping S3 upload."; exit 0; }
+          echo "Uploading to s3..."
           aws configure set region "$AWS_REGION"
-          aws s3 cp app.aab "s3://$S3_BUCKET/expo-artifacts/app-${{ github.run_id }}-${{ github.run_number }}.aab" --acl public-read
-          echo "Uploaded to: https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/expo-artifacts/app-${{ github.run_id }}-${{ github.run_number }}.aab"
+          aws s3 cp app.aab "s3://$S3_BUCKET/expo-artifacts/$GITHUB_RUN_ID-app.aab" || echo "S3 upload failed (non-fatal)."
+        continue-on-error: true
