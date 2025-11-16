@@ -98,9 +98,9 @@ jobs:
           if [ -n "$WEB_URL" ]; then
             echo "Downloading web app from $WEB_URL"
             tmpzip="/tmp/webapp-$$.zip"
-            curl -fsSL "$WEB_URL" -o "$tmpzip" || { echo "download failed"; exit 0; }
+            curl -fsSL "$WEB_URL" -o "$tmpzip" || { echo "ERROR: Download failed from URL: $WEB_URL"; exit 1; }
             mkdir -p /tmp/webapp-$$
-            unzip -q "$tmpzip" -d /tmp/webapp-$$ || true
+            unzip -q "$tmpzip" -d /tmp/webapp-$$ || { echo "ERROR: Failed to unzip the downloaded file. It may not be a valid ZIP archive."; exit 1; }
             # copy contents into project dir but do not overwrite .git
             rsync -a --exclude='.git' /tmp/webapp-$$/ "$PROJECT_DIR/"
             echo "Copied web app into $PROJECT_DIR"
