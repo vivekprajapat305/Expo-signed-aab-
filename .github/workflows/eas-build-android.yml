@@ -156,24 +156,11 @@ jobs:
           # login so eas commands can run
           echo "$EXPO_TOKEN" | eas login --token
 
-      - name: Ensure EAS project is initialized (non-interactive)
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          # Initialize / link the project to EAS in non-interactive mode.
-          # This registers the project on Expo servers and writes projectId locally so `eas build` works in CI.
-          # If the project is already linked, this command returns success and is safe to run.
-          eas init --non-interactive || true
+      - name: Ensure EAS project is initialized
+        run: npx eas-cli@latest init --non-interactive --force
 
-      - name: Show eas.json (debug)
-        run: |
-          echo "------ eas.json ------"
-          cat eas.json || true
-          echo "----------------------"
-
-      - name: Run EAS build (android app-bundle)
-        run: |
-          npx eas build --platform android --profile production --non-interactive
+      - name: Run EAS build
+        run: npx eas-cli@latest build --platform android --profile production --non-interactive
 
       - name: (Optional) Upload build artifact to S3 (non-fatal)
         if: env.UPLOAD_TO_S3 == 'true'
