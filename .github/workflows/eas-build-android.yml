@@ -21,10 +21,6 @@ on:
         description: 'App version (expo.version) e.g. 1.0.0'
         required: true
         default: '1.0.0'
-      versionCode:
-        description: 'Android version code (integer)'
-        required: false
-        default: ''
       icon_url:
         description: 'App icon URL (1024x1024 PNG)'
         required: false
@@ -59,12 +55,12 @@ jobs:
         id: cache-npm
         uses: actions/cache@v4
         with:
-          # use package-lock.json hash for a stable, reliable cache key
           path: ~/.npm
+          # use package-lock.json hash so key is stable and avoids invalid key 400 responses
           key: node-modules-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             node-modules-${{ runner.os }}-
-        continue-on-error: true   # cache service errors shouldn't fail the build
+        continue-on-error: true
 
       - name: Setup Expo
         uses: expo/expo-github-action@v7
@@ -76,7 +72,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm ci
+          npm ci || (npm install --legacy-peer-deps && echo "npm ci failed, fell back to npm install")
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
@@ -96,13 +92,8 @@ jobs:
           const path = 'app.json';
           const config = JSON.parse(fs.readFileSync(path, 'utf8'));
           const expoRoot = config.expo ? config.expo : config;
-
           expoRoot.name = process.env.APP_NAME || expoRoot.name;
           expoRoot.version = process.env.VERSION_NAME || expoRoot.version;
-
-          if (!expoRoot.android) expoRoot.android = {};
-          expoRoot.android.package = process.env.APPLICATION_ID || expoRoot.android.package;
-
           if (process.env.ICON_URL) {
             expoRoot.icon = process.env.ICON_URL;
           }
@@ -110,7 +101,8 @@ jobs:
             if (!expoRoot.splash) expoRoot.splash = {};
             expoRoot.splash.image = process.env.SPLASH_IMAGE_URL;
           }
-
+          if (!expoRoot.android) expoRoot.android = {};
+          expoRoot.android.package = process.env.APPLICATION_ID || expoRoot.android.package;
           const output = config.expo ? { ...config, expo: expoRoot } : expoRoot;
           fs.writeFileSync(path, JSON.stringify(output, null, 2));
           console.log('Patched app.json successfully.');
@@ -121,23 +113,6 @@ jobs:
           APPLICATION_ID: ${{ github.event.inputs.application_id }}
           ICON_URL: ${{ github.event.inputs.icon_url }}
           SPLASH_IMAGE_URL: ${{ github.event.inputs.splash_image_url }}
-
-      - name: Patch app.json with versionCode (if provided)
-        if: ${{ github.event.inputs.versionCode != '' }}
-        run: |
-          node -e "
-          const fs=require('fs');
-          const p='app.json';
-          if(!fs.existsSync(p)){ console.log('app.json not found'); process.exit(0); }
-          const cfg=JSON.parse(fs.readFileSync(p,'utf8'));
-          cfg.expo = cfg.expo || {};
-          cfg.expo.android = cfg.expo.android || {};
-          cfg.expo.android.versionCode = parseInt(process.env.VERSION_CODE,10);
-          fs.writeFileSync(p, JSON.stringify(cfg,null,2));
-          console.log('Patched app.json.versionCode=', process.env.VERSION_CODE);
-          "
-        env:
-          VERSION_CODE: ${{ github.event.inputs.versionCode }}
 
       - name: Show patched app.json (for debug)
         run: |
@@ -153,16 +128,30 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          # login so eas commands can run
-          echo "$EXPO_TOKEN" | eas login --token
+          # Use npx eas-cli to login non-interactively with token
+          # If eas-cli is already installed globally this still works via npx.
+          npx --yes eas-cli@latest login --token "$EXPO_TOKEN"
 
-      - name: Ensure EAS project is initialized
-        run: npx eas-cli@latest init --non-interactive --force
+      - name: Ensure EAS project is initialized (non-interactive)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          # Initialize / link the project to EAS in non-interactive mode.
+          # This registers the project on Expo servers and writes projectId locally so `eas build` works in CI.
+          # If the project is already linked, this command returns success and is safe to run.
+          eas init --non-interactive || true
 
-      - name: Run EAS build
-        run: npx eas-cli@latest build --platform android --profile production --non-interactive
+      - name: Show eas.json (debug)
+        run: |
+          echo "------ eas.json ------"
+          cat eas.json || true
+          echo "----------------------"
 
-      - name: (Optional) Upload build artifact to S3 (non-fatal)
+      - name: Run EAS build (android app-bundle)
+        run: |
+          npx eas build --platform android --profile production --non-interactive
+
+      - name: (Optional) Download build artifact & Upload to S3
         if: env.UPLOAD_TO_S3 == 'true'
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -172,18 +161,20 @@ jobs:
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
         run: |
           set -e
-          # find the artifact URL (best-effort). If any step fails, do not fail the whole job.
-          set +e
           BUILD_ID=$(eas build:list --platform android --limit 1 --status finished --json | jq -r '.[0].id')
-          ARTIFACT_URL=$(eas build:view $BUILD_ID --json | jq -r '.artifacts.buildUrl // empty')
-          if [ -z "$ARTIFACT_URL" ]; then
-            echo "No artifact URL found; skipping S3 upload."
-            exit 0
+          if [ -z "$BUILD_ID" ] || [ "$BUILD_ID" == "null" ]; then
+            echo "No finished builds found."
+            exit 1
           fi
+          echo "Found build id: $BUILD_ID"
+          ARTIFACT_URL=$(eas build:view $BUILD_ID --json | jq -r '.artifacts.buildUrl')
+          if [ -z "$ARTIFACT_URL" ] || [ "$ARTIFACT_URL" == "null" ]; then
+            echo "No artifact url found for build $BUILD_ID"
+            exit 1
+          fi
+          echo "Artifact URL: $ARTIFACT_URL"
           curl -L -H "Authorization: Bearer $EXPO_TOKEN" -o app.aab "$ARTIFACT_URL"
-          if [ ! -f app.aab ]; then
-            echo "Download failed; skipping S3 upload."
-            exit 0
-          fi
-          aws s3 cp app.aab "s3://$S3_BUCKET/expo-artifacts/$GITHUB_RUN_ID-app.aab" || echo "S3 upload failed but not failing job."
+          aws configure set region "$AWS_REGION"
+          aws s3 cp app.aab "s3://$S3_BUCKET/expo-artifacts/app-${{ github.run_id }}-${{ github.run_number }}.aab" --acl public-read
+          echo "Uploaded to: https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/expo-artifacts/app-${{ github.run_id }}-${{ github.run_number }}.aab"
         continue-on-error: true
