@@ -21,6 +21,10 @@ on:
         description: 'App version (expo.version) e.g. 1.0.0'
         required: true
         default: '1.0.0'
+      versionCode:
+        description: 'Android version code (integer)'
+        required: true
+        default: '1'
       icon_url:
         description: 'App icon URL (1024x1024 PNG)'
         required: false
@@ -64,9 +68,9 @@ jobs:
 
       - name: Setup Expo
         uses: expo/expo-github-action@v7
+      - name: Setup Expo and EAS
+        uses: expo/expo-github-action@v8
         with:
-          packager: 'npm'
-          expo-version: latest
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
@@ -162,12 +166,14 @@ jobs:
         run: |
           set -e
           BUILD_ID=$(eas build:list --platform android --limit 1 --status finished --json | jq -r '.[0].id')
+          BUILD_ID=$(npx eas-cli@latest build:list --platform android --limit 1 --status finished --json | jq -r '.[0].id')
           if [ -z "$BUILD_ID" ] || [ "$BUILD_ID" == "null" ]; then
             echo "No finished builds found."
             exit 1
           fi
           echo "Found build id: $BUILD_ID"
           ARTIFACT_URL=$(eas build:view $BUILD_ID --json | jq -r '.artifacts.buildUrl')
+          ARTIFACT_URL=$(npx eas-cli@latest build:view $BUILD_ID --json | jq -r '.artifacts.buildUrl')
           if [ -z "$ARTIFACT_URL" ] || [ "$ARTIFACT_URL" == "null" ]; then
             echo "No artifact url found for build $BUILD_ID"
             exit 1
