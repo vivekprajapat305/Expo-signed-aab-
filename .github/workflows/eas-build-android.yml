@@ -23,8 +23,8 @@ on:
         default: '1.0.0'
       versionCode:
         description: 'Android version code (integer)'
-        required: true
-        default: '1'
+        required: false
+        default: ''
       icon_url:
         description: 'App icon URL (1024x1024 PNG)'
         required: false
@@ -55,15 +55,16 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Restore npm cache
+      - name: Cache npm
         id: cache-npm
-        uses: actions/cache@v3
-        continue-on-error: true
+        uses: actions/cache@v4
         with:
+          # use package-lock.json hash for a stable, reliable cache key
           path: ~/.npm
           key: node-modules-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             node-modules-${{ runner.os }}-
+        continue-on-error: true   # cache service errors shouldn't fail the build
 
       - name: Setup Expo
         uses: expo/expo-github-action@v7
@@ -101,7 +102,6 @@ jobs:
 
           if (!expoRoot.android) expoRoot.android = {};
           expoRoot.android.package = process.env.APPLICATION_ID || expoRoot.android.package;
-          expoRoot.android.versionCode = parseInt(process.env.VERSION_CODE, 10) || expoRoot.android.versionCode;
 
           if (process.env.ICON_URL) {
             expoRoot.icon = process.env.ICON_URL;
@@ -119,9 +119,25 @@ jobs:
           APP_NAME: ${{ github.event.inputs.app_name }}
           VERSION_NAME: ${{ github.event.inputs.version_name }}
           APPLICATION_ID: ${{ github.event.inputs.application_id }}
-          VERSION_CODE: ${{ github.event.inputs.versionCode }}
           ICON_URL: ${{ github.event.inputs.icon_url }}
           SPLASH_IMAGE_URL: ${{ github.event.inputs.splash_image_url }}
+
+      - name: Patch app.json with versionCode (if provided)
+        if: ${{ github.event.inputs.versionCode != '' }}
+        run: |
+          node -e "
+          const fs=require('fs');
+          const p='app.json';
+          if(!fs.existsSync(p)){ console.log('app.json not found'); process.exit(0); }
+          const cfg=JSON.parse(fs.readFileSync(p,'utf8'));
+          cfg.expo = cfg.expo || {};
+          cfg.expo.android = cfg.expo.android || {};
+          cfg.expo.android.versionCode = parseInt(process.env.VERSION_CODE,10);
+          fs.writeFileSync(p, JSON.stringify(cfg,null,2));
+          console.log('Patched app.json.versionCode=', process.env.VERSION_CODE);
+          "
+        env:
+          VERSION_CODE: ${{ github.event.inputs.versionCode }}
 
       - name: Show patched app.json (for debug)
         run: |
@@ -159,7 +175,7 @@ jobs:
         run: |
           npx eas build --platform android --profile production --non-interactive
 
-      - name: (Optional) Download build artifact & Upload to S3
+      - name: (Optional) Upload build artifact to S3 (non-fatal)
         if: env.UPLOAD_TO_S3 == 'true'
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -169,19 +185,18 @@ jobs:
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
         run: |
           set -e
+          # find the artifact URL (best-effort). If any step fails, do not fail the whole job.
+          set +e
           BUILD_ID=$(eas build:list --platform android --limit 1 --status finished --json | jq -r '.[0].id')
-          if [ -z "$BUILD_ID" ] || [ "$BUILD_ID" == "null" ]; then
-            echo "No finished builds found."
-            exit 1
+          ARTIFACT_URL=$(eas build:view $BUILD_ID --json | jq -r '.artifacts.buildUrl // empty')
+          if [ -z "$ARTIFACT_URL" ]; then
+            echo "No artifact URL found; skipping S3 upload."
+            exit 0
           fi
-          echo "Found build id: $BUILD_ID"
-          ARTIFACT_URL=$(eas build:view $BUILD_ID --json | jq -r '.artifacts.buildUrl')
-          if [ -z "$ARTIFACT_URL" ] || [ "$ARTIFACT_URL" == "null" ]; then
-            echo "No artifact url found for build $BUILD_ID"
-            exit 1
-          fi
-          echo "Artifact URL: $ARTIFACT_URL"
           curl -L -H "Authorization: Bearer $EXPO_TOKEN" -o app.aab "$ARTIFACT_URL"
-          aws configure set region "$AWS_REGION"
-          aws s3 cp app.aab "s3://$S3_BUCKET/expo-artifacts/app-${{ github.run_id }}-${{ github.run_number }}.aab" --acl public-read
-          echo "Uploaded to: https://$S3_BUCKET.s3.$AWS_REGION.amazonaws.com/expo-artifacts/app-${{ github.run_id }}-${{ github.run_number }}.aab"
+          if [ ! -f app.aab ]; then
+            echo "Download failed; skipping S3 upload."
+            exit 0
+          fi
+          aws s3 cp app.aab "s3://$S3_BUCKET/expo-artifacts/$GITHUB_RUN_ID-app.aab" || echo "S3 upload failed but not failing job."
+        continue-on-error: true
