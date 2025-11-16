@@ -7,8 +7,7 @@ on:
     inputs:
       web_app_url:
         description: 'Web app ZIP URL (must be downloadable). Example: https://.../app.zip'
-        required: false
-        default: ''
+        required: true
       app_name:
         description: 'App display name (expo.name)'
         required: true
@@ -85,7 +84,7 @@ jobs:
         run: |
           set -e
           # target project dir (keep default project root)
-          export PROJECT_DIR="${{ env.PROJECT_PATH }}"
+          export PROJECT_DIR="${{ env.PROJECT_PATH:-. }}"
           # read inputs passed to the workflow
           export WEB_URL="${{ github.event.inputs.web_app_url || '' }}"
           export APP_NAME="${{ github.event.inputs.app_name || '' }}"
@@ -105,7 +104,8 @@ jobs:
             rsync -a --exclude='.git' /tmp/webapp-$$/ "$PROJECT_DIR/"
             echo "Copied web app into $PROJECT_DIR"
           else
-            echo "No WEB_URL provided, skipping download"
+            echo "ERROR: web_app_url is required but was not provided."
+            exit 1
           fi
 
           # patch/create app.json
