@@ -85,15 +85,15 @@ jobs:
         run: |
           set -e
           # target project dir (keep default project root)
-          PROJECT_DIR="${{ env.PROJECT_PATH }}"
+          export PROJECT_DIR="${{ env.PROJECT_PATH }}"
           # read inputs passed to the workflow
-          WEB_URL="${{ github.event.inputs.web_app_url || '' }}"
-          APP_NAME="${{ github.event.inputs.app_name || '' }}"
-          APPLICATION_ID="${{ github.event.inputs.application_id || '' }}"
-          VERSION_NAME="${{ github.event.inputs.version_name || '' }}"
-          VERSION_CODE="${{ github.event.inputs.version_code || '' }}"
-          ICON_URL="${{ github.event.inputs.icon_url || '' }}"
-          SPLASH_URL="${{ github.event.inputs.splash_image_url || '' }}"
+          export WEB_URL="${{ github.event.inputs.web_app_url || '' }}"
+          export APP_NAME="${{ github.event.inputs.app_name || '' }}"
+          export APPLICATION_ID="${{ github.event.inputs.application_id || '' }}"
+          export VERSION_NAME="${{ github.event.inputs.version_name || '' }}"
+          export VERSION_CODE="${{ github.event.inputs.version_code || '' }}"
+          export ICON_URL="${{ github.event.inputs.icon_url || '' }}"
+          export SPLASH_URL="${{ github.event.inputs.splash_image_url || '' }}"
 
           if [ -n "$WEB_URL" ]; then
             echo "Downloading web app from $WEB_URL"
@@ -109,7 +109,7 @@ jobs:
           fi
 
           # patch/create app.json
-          APP_JSON_PATH="$PROJECT_DIR/app.json"
+          export APP_JSON_PATH="$PROJECT_DIR/app.json"
           if [ ! -f "$APP_JSON_PATH" ]; then
             echo "{}" > "$APP_JSON_PATH"
           fi
