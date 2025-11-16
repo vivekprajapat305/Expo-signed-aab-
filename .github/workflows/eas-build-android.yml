@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       web_app_url:
-        description: 'Web app URL (optional)'
+        description: 'Web app ZIP URL (must be downloadable). Example: https://.../app.zip'
         required: false
         default: ''
       app_name:
@@ -21,12 +21,16 @@ on:
         description: 'App version (expo.version) e.g. 1.0.0'
         required: true
         default: '1.0.0'
+      version_code:
+        description: 'Android versionCode (integer)'
+        required: false
+        default: '1'
       icon_url:
-        description: 'App icon URL (1024x1024 PNG)'
+        description: 'App icon URL (1024x1024 PNG) optional'
         required: false
         default: ''
       splash_image_url:
-        description: 'Splash screen image URL (1242x2436 PNG)'
+        description: 'Splash image URL (1242x2436 PNG) optional'
         required: false
         default: ''
 
@@ -76,6 +80,79 @@ jobs:
 
       - name: Ensure EAS project is initialized
         run: npx eas-cli@latest init --non-interactive --force
+
+      - name: Download web app (if provided) and patch app.json
+        run: |
+          set -e
+          # target project dir (keep default project root)
+          PROJECT_DIR="${{ env.PROJECT_PATH:-. }}"
+          # read inputs passed to the workflow
+          WEB_URL="${{ github.event.inputs.web_app_url || '' }}"
+          APP_NAME="${{ github.event.inputs.app_name || '' }}"
+          APPLICATION_ID="${{ github.event.inputs.application_id || '' }}"
+          VERSION_NAME="${{ github.event.inputs.version_name || '' }}"
+          VERSION_CODE="${{ github.event.inputs.version_code || '' }}"
+          ICON_URL="${{ github.event.inputs.icon_url || '' }}"
+          SPLASH_URL="${{ github.event.inputs.splash_image_url || '' }}"
+
+          if [ -n "$WEB_URL" ]; then
+            echo "Downloading web app from $WEB_URL"
+            tmpzip="/tmp/webapp-$$.zip"
+            curl -fsSL "$WEB_URL" -o "$tmpzip" || { echo "download failed"; exit 0; }
+            mkdir -p /tmp/webapp-$$
+            unzip -q "$tmpzip" -d /tmp/webapp-$$ || true
+            # copy contents into project dir but do not overwrite .git
+            rsync -a --exclude='.git' /tmp/webapp-$$/ "$PROJECT_DIR/"
+            echo "Copied web app into $PROJECT_DIR"
+          else
+            echo "No WEB_URL provided, skipping download"
+          fi
+
+          # patch/create app.json
+          APP_JSON_PATH="$PROJECT_DIR/app.json"
+          if [ ! -f "$APP_JSON_PATH" ]; then
+            echo "{}" > "$APP_JSON_PATH"
+          fi
+
+          python3 - <<'PY2'
+          import json,sys,os
+          p=os.environ['APP_JSON_PATH']
+          with open(p,'r') as f:
+            try:
+              cfg=json.load(f)
+            except:
+              cfg={}
+
+          expo = cfg.get('expo',{}) or {}
+
+          # apply inputs
+          def inp(k): return os.environ.get(k,'') or None
+
+          if inp('APP_NAME'): expo['name']=inp('APP_NAME')
+          if inp('APPLICATION_ID'):
+            android = expo.get('android',{}) or {}
+            android['package']=inp('APPLICATION_ID')
+            expo['android']=android
+          if inp('VERSION_NAME'): expo['version']=inp('VERSION_NAME')
+          if inp('VERSION_CODE'):
+            android = expo.get('android',{}) or {}
+            try:
+              android['versionCode']=int(inp('VERSION_CODE'))
+            except:
+              android['versionCode']=int(inp('VERSION_CODE') or 1)
+            expo['android']=android
+          if inp('ICON_URL'): expo['icon']=inp('ICON_URL')
+          if inp('SPLASH_URL'):
+            splash = expo.get('splash',{}) or {}
+            splash['image']=inp('SPLASH_URL')
+            expo['splash']=splash
+
+          cfg['expo']=expo
+
+          with open(p,'w') as f:
+            json.dump(cfg,f,indent=2)
+          print("Patched app.json at",p)
+          PY2
 
       - name: Run EAS build
         run: npx eas-cli@latest build --platform android --profile production --non-interactive
