@@ -1,0 +1,8 @@
+STEP 0: Sanity checks
+STEP 1: Create a new branch (safe)
+fatal: a branch named 'ci/add-weburl-download-and-versioncode' already exists
+branch already exists locally, checking it out
+error: Your local changes to the following files would be overwritten by checkout:
+	run.log
+Please commit your changes or stash them before you switch branches.
+Aborting
