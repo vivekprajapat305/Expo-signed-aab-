@@ -84,7 +84,7 @@ jobs:
         run: |
           set -e
           # target project dir (keep default project root)
-          export PROJECT_DIR="${{ env.PROJECT_PATH:-. }}"
+          export PROJECT_DIR="${PROJECT_PATH:-.}"
           # read inputs passed to the workflow
           export WEB_URL="${{ github.event.inputs.web_app_url || '' }}"
           export APP_NAME="${{ github.event.inputs.app_name || '' }}"
