@@ -8,6 +8,12 @@
 "buildType": "app-bundle",
 "distribution": "store"
 }
+},
+"production-apk": {
+"android": {
+"buildType": "apk",
+"distribution": "store"
+}
 }
 }
 }
