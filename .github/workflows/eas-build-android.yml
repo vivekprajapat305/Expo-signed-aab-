@@ -106,11 +106,15 @@ jobs:
                 file "$tmpzip" # print file type for debugging
                 exit 1
             fi
-            mkdir -p /tmp/webapp-$$
-            unzip -q "$tmpzip" -d /tmp/webapp-$$ || true
+            TMP_DIR="/tmp/webapp-$$"
+            mkdir -p "$TMP_DIR"
+            unzip -q "$tmpzip" -d "$TMP_DIR" || true
+            echo "--- Contents of downloaded web app ---"
+            ls -la "$TMP_DIR"
+            echo "------------------------------------"
             # copy contents into project dir but do not overwrite .git
-            rsync -a --exclude='.git' /tmp/webapp-$$/ "$PROJECT_DIR/"
-            echo "Copied web app into $PROJECT_DIR"
+            rsync -a --exclude='.git' "$TMP_DIR"/ "$PROJECT_DIR/"
+            echo "✅ Web app files copied successfully into project directory."
           else
             echo "No WEB_URL provided, skipping download"
           fi
@@ -121,6 +125,12 @@ jobs:
             echo "{}" > "$APP_JSON_PATH"
           fi
           python3 .github/scripts/patch-app-json.py
+
+      - name: Verify final project structure
+        run: |
+          echo "--- Final project structure before build ---"
+          ls -la
+          echo "------------------------------------------"
 
       - name: Run EAS build
         run: npx eas-cli@latest build --platform android --profile production --non-interactive
