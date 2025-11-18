@@ -82,33 +82,65 @@ jobs:
 
       - name: Download and validate web app, then patch app.json
         run: |
-          set -ex
+          set -e
+          # target project dir (keep default project root)
+          PROJECT_DIR="${{ env.PROJECT_PATH || '.' }}"
+          # read inputs passed to the workflow
+          WEB_URL="${{ github.event.inputs.web_app_url || '' }}"
+          APP_NAME="${{ github.event.inputs.app_name || '' }}"
+          APPLICATION_ID="${{ github.event.inputs.application_id || '' }}"
+          VERSION_NAME="${{ github.event.inputs.version_name || '' }}"
+          VERSION_CODE="${{ github.event.inputs.version_code || '' }}"
+          ICON_URL="${{ github.event.inputs.icon_url || '' }}"
+          SPLASH_URL="${{ github.event.inputs.splash_image_url || '' }}"
 
-          # Target project dir (repo root)
-          PROJECT_DIR="."
+          if [ -n "$WEB_URL" ]; then
+            echo "Downloading web app from $WEB_URL"
+            tmpzip="/tmp/webapp-$$.zip"
+            unzip_dir="/tmp/webapp-$$"
+            curl -fsSL "$WEB_URL" -o "$tmpzip" || { echo "download failed"; exit 0; }
+            #-- robust zip check --
+            if ! file "$tmpzip" | grep -q "Zip archive data"; then
+                echo "ERROR: The file downloaded from $WEB_URL is not a valid ZIP archive."
+                echo "Please ensure the URL points directly to a ZIP file."
+                file "$tmpzip" # print file type for debugging
+                exit 1
+            fi
+            mkdir -p "$unzip_dir"
+            unzip -q "$tmpzip" -d "$unzip_dir" || true
 
-          # Read inputs passed to the workflow
-          WEB_URL="${{ github.event.inputs.web_app_url }}"
-          export APP_NAME="${{ github.event.inputs.app_name }}"
-          export APPLICATION_ID="${{ github.event.inputs.application_id }}"
-          export VERSION_NAME="${{ github.event.inputs.version_name }}"
-          export VERSION_CODE="${{ github.event.inputs.version_code }}"
-          export ICON_URL="${{ github.event.inputs.icon_url }}"
-          export SPLASH_URL="${{ github.event.inputs.splash_image_url }}"
+            # --- DEBUGGING: Show the unzipped file structure ---
+            echo "--- Unzipped content in $unzip_dir ---"
+            ls -laR "$unzip_dir"
+            echo "-------------------------------------------"
 
-          echo "Downloading web app from $WEB_URL"
-          tmpzip="/tmp/webapp.zip"
+            # --- Robustly find the source directory for rsync ---
+            # Handle zip files that have a single root directory
+            src_dir="$unzip_dir"
+            # Count number of items in the unzip_dir
+            item_count=$(find "$unzip_dir" -mindepth 1 -maxdepth 1 | wc -l)
+            if [ "$item_count" -eq 1 ]; then
+              # If there's only one item, it's likely a container directory
+              # Use that directory as the source for rsync
+              nested_dir=$(find "$unzip_dir" -mindepth 1 -maxdepth 1 -type d)
+              if [ -n "$nested_dir" ]; then
+                  echo "Detected nested directory: $nested_dir. Using it as source."
+                  src_dir="$nested_dir"
+              fi
+            fi
 
-          # Download with --fail to ensure curl exits non-zero on server errors (4xx, 5xx)
-          curl -fSLo "$tmpzip" "$WEB_URL"
+            # copy contents into project dir but do not overwrite .git
+            echo "Syncing from $src_dir/ to $PROJECT_DIR/"
+            rsync -a --exclude='.git' "$src_dir"/ "$PROJECT_DIR/"
+            echo "Copied web app into $PROJECT_DIR"
 
-          echo "Validating downloaded file..."
-          if ! file "$tmpzip" | grep -q "Zip archive data"; then
-              echo "ERROR: The file downloaded from '$WEB_URL' is not a valid ZIP archive."
-              echo "Please ensure the URL points directly to a ZIP file."
-              # Print file type for debugging, then exit with an error
-              file "$tmpzip"
-              exit 1
+            # --- DEBUGGING: Show final structure in project dir ---
+            echo "--- Final content in $PROJECT_DIR ---"
+            ls -la "$PROJECT_DIR"
+            echo "----------------------------------------"
+
+          else
+            echo "No WEB_URL provided, skipping download"
           fi
           echo "File is a valid ZIP archive."
 
