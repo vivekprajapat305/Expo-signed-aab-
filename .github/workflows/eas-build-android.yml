@@ -7,8 +7,7 @@ on:
     inputs:
       web_app_url:
         description: 'Web app ZIP URL (must be downloadable). Example: https://.../app.zip'
-        required: false
-        default: ''
+        required: true
       app_name:
         description: 'App display name (expo.name)'
         required: true
@@ -81,7 +80,7 @@ jobs:
       - name: Ensure EAS project is initialized
         run: npx eas-cli@latest init --non-interactive --force
 
-      - name: Download web app (if provided) and patch app.json
+      - name: Download and validate web app, then patch app.json
         run: |
           set -e
           # target project dir (keep default project root)
@@ -98,6 +97,7 @@ jobs:
           if [ -n "$WEB_URL" ]; then
             echo "Downloading web app from $WEB_URL"
             tmpzip="/tmp/webapp-$$.zip"
+            unzip_dir="/tmp/webapp-$$"
             curl -fsSL "$WEB_URL" -o "$tmpzip" || { echo "download failed"; exit 0; }
             #-- robust zip check --
             if ! file "$tmpzip" | grep -q "Zip archive data"; then
@@ -118,9 +118,17 @@ jobs:
           else
             echo "No WEB_URL provided, skipping download"
           fi
+          echo "File is a valid ZIP archive."
 
-          # patch/create app.json
-          APP_JSON_PATH="$PROJECT_DIR/app.json"
+          # Unzip and copy into project dir
+          tmpdir_unzip="/tmp/webapp-unzipped"
+          mkdir -p "$tmpdir_unzip"
+          unzip -q "$tmpzip" -d "$tmpdir_unzip"
+          rsync -a --exclude='.git' "$tmpdir_unzip/" "$PROJECT_DIR/"
+          echo "Successfully copied web app into '$PROJECT_DIR'"
+
+          # Patch app.json using the python script
+          export APP_JSON_PATH="$PROJECT_DIR/app.json"
           if [ ! -f "$APP_JSON_PATH" ]; then
             echo "{}" > "$APP_JSON_PATH"
           fi
@@ -144,22 +152,46 @@ jobs:
           AWS_REGION: ${{ secrets.AWS_REGION }}
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
         run: |
-          set -e
-          # find last finished build id (best-effort)
-          BUILD_ID=$(npx eas-cli@latest build:list --platform android --limit 1 --status finished --json | jq -r '.[0].id' || true)
-          if [ -z "$BUILD_ID" ] || [ "$BUILD_ID" = "null" ]; then
-            echo "No finished builds found; skipping S3 upload."
-            exit 0
+          set -ex
+          echo "INFO: Starting AAB build..."
+          npx eas-cli@latest build --platform android --profile production --non-interactive --json > build-aab-output.json
+          cat build-aab-output.json
+
+          echo "INFO: Starting APK build..."
+          npx eas-cli@latest build --platform android --profile production-apk --non-interactive --json > build-apk-output.json
+          cat build-apk-output.json
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Download AAB and APK from EAS
+        id: download_artifacts
+        run: |
+          set -ex
+          AAB_URL=$(jq -r '.[0].artifacts.buildUrl' build-aab-output.json)
+          APK_URL=$(jq -r '.[0].artifacts.buildUrl' build-apk-output.json)
+
+          if [ -z "$AAB_URL" ] || [ "$AAB_URL" == "null" ]; then
+            echo "::error::Could not find AAB artifact URL in build output."
+            exit 1
           fi
-          echo "Found build id: $BUILD_ID"
-          ARTIFACT_URL=$(npx eas-cli@latest build:view $BUILD_ID --json | jq -r '.artifacts.buildUrl // empty' || true)
-          if [ -z "$ARTIFACT_URL" ]; then
-            echo "No artifact URL found for build $BUILD_ID; skipping S3 upload."
-            exit 0
+          if [ -z "$APK_URL" ] || [ "$APK_URL" == "null" ]; then
+            echo "::error::Could not find APK artifact URL in build output."
+            exit 1
           fi
-          echo "Downloading artifact from: $ARTIFACT_URL"
-          curl -fL -o app.aab "$ARTIFACT_URL" || { echo "Download failed; skipping S3 upload."; exit 0; }
-          echo "Uploading to s3..."
-          aws configure set region "$AWS_REGION"
-          aws s3 cp app.aab "s3://$S3_BUCKET/expo-artifacts/$GITHUB_RUN_ID-app.aab" || echo "S3 upload failed (non-fatal)."
-        continue-on-error: true
+
+          echo "Downloading AAB from $AAB_URL"
+          curl -fLo application.aab "$AAB_URL"
+          echo "AAB downloaded successfully."
+
+          echo "Downloading APK from $APK_URL"
+          curl -fLo application.apk "$APK_URL"
+          echo "APK downloaded successfully."
+
+      - name: Upload AAB and APK as build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-artifacts
+          path: |
+            application.aab
+            application.apk
