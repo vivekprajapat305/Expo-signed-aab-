@@ -106,39 +106,15 @@ jobs:
                 file "$tmpzip" # print file type for debugging
                 exit 1
             fi
-            mkdir -p "$unzip_dir"
-            unzip -q "$tmpzip" -d "$unzip_dir" || true
-
-            # --- DEBUGGING: Show the unzipped file structure ---
-            echo "--- Unzipped content in $unzip_dir ---"
-            ls -laR "$unzip_dir"
-            echo "-------------------------------------------"
-
-            # --- Robustly find the source directory for rsync ---
-            # Handle zip files that have a single root directory
-            src_dir="$unzip_dir"
-            # Count number of items in the unzip_dir
-            item_count=$(find "$unzip_dir" -mindepth 1 -maxdepth 1 | wc -l)
-            if [ "$item_count" -eq 1 ]; then
-              # If there's only one item, it's likely a container directory
-              # Use that directory as the source for rsync
-              nested_dir=$(find "$unzip_dir" -mindepth 1 -maxdepth 1 -type d)
-              if [ -n "$nested_dir" ]; then
-                  echo "Detected nested directory: $nested_dir. Using it as source."
-                  src_dir="$nested_dir"
-              fi
-            fi
-
+            TMP_DIR="/tmp/webapp-$$"
+            mkdir -p "$TMP_DIR"
+            unzip -q "$tmpzip" -d "$TMP_DIR" || true
+            echo "--- Contents of downloaded web app ---"
+            ls -la "$TMP_DIR"
+            echo "------------------------------------"
             # copy contents into project dir but do not overwrite .git
-            echo "Syncing from $src_dir/ to $PROJECT_DIR/"
-            rsync -a --exclude='.git' "$src_dir"/ "$PROJECT_DIR/"
-            echo "Copied web app into $PROJECT_DIR"
-
-            # --- DEBUGGING: Show final structure in project dir ---
-            echo "--- Final content in $PROJECT_DIR ---"
-            ls -la "$PROJECT_DIR"
-            echo "----------------------------------------"
-
+            rsync -a --exclude='.git' "$TMP_DIR"/ "$PROJECT_DIR/"
+            echo "✅ Web app files copied successfully into project directory."
           else
             echo "No WEB_URL provided, skipping download"
           fi
@@ -158,7 +134,23 @@ jobs:
           fi
           python3 .github/scripts/patch-app-json.py
 
-      - name: Run EAS builds for AAB and APK
+      - name: Verify final project structure
+        run: |
+          echo "--- Final project structure before build ---"
+          ls -la
+          echo "------------------------------------------"
+
+      - name: Run EAS build
+        run: npx eas-cli@latest build --platform android --profile production --non-interactive
+
+      - name: (Optional) Download build artifact & Upload to S3 (non-fatal)
+        if: env.UPLOAD_TO_S3 == 'true'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
         run: |
           set -ex
           echo "INFO: Starting AAB build..."
